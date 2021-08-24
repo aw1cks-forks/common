@@ -632,8 +632,9 @@ func NewTLSConfig(cfg *TLSConfig) (*tls.Config, error) {
 
 	// If a CA cert is provided then let's read it in so we can validate the
 	// scrape target's certificate properly.
-	if len(cfg.CAFile) > 0 {
-		b, err := readCAFile(cfg.CAFile)
+	// Use the inline value instead of the file path if defined.
+	if len(cfg.CAFile) > 0 || cfg.CACert != "" {
+		b, err := readCAFile(cfg.CAFile, cfg.CACert)
 		if err != nil {
 			return nil, err
 		}
@@ -664,11 +665,17 @@ func NewTLSConfig(cfg *TLSConfig) (*tls.Config, error) {
 // TLSConfig configures the options for TLS connections.
 type TLSConfig struct {
 	// The CA cert to use for the targets.
+	// ca_file will specify a file to be read, ca_cert will put the cert inline into the config file.
 	CAFile string `yaml:"ca_file,omitempty" json:"ca_file,omitempty"`
+	CACert string `yaml:"ca_cert,omitempty" json:"ca_cert,omitempty"`
 	// The client cert file for the targets.
+	// cert_file will specify a file to be read, cert will put the cert inline into the config file.
 	CertFile string `yaml:"cert_file,omitempty" json:"cert_file,omitempty"`
+	Cert string `yaml:"cert,omitempty" json:"cert,omitempty"`
 	// The client key file for the targets.
+	// key_file will specify a file to be read, key_cert will put the cert inline into the config file.
 	KeyFile string `yaml:"key_file,omitempty" json:"key_file,omitempty"`
+	KeyCert string `yaml:"key_cert,omitempty" json:"key_cert,omitempty"`
 	// Used to verify the hostname for the targets.
 	ServerName string `yaml:"server_name,omitempty" json:"server_name,omitempty"`
 	// Disable target certificate validation.
@@ -692,19 +699,36 @@ func (c *TLSConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 }
 
 // getClientCertificate reads the pair of client cert and key from disk and returns a tls.Certificate.
+// If Cert and KeyCert are defined, these will take precedence and the values from the config file will be used.
 func (c *TLSConfig) getClientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-	cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+	var cert tls.Certificate
+	var err error
+	inlineCerts := c.Cert != "" && c.KeyCert != ""
+	if inlineCerts == true {
+		cert, err = tls.X509KeyPair([]byte(c.Cert), []byte(c.KeyCert))
+	} else {
+		cert, err = tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("unable to use specified client cert (%s) & key (%s): %s", c.CertFile, c.KeyFile, err)
+		if inlineCerts == true {
+			return nil, fmt.Errorf("unable to use specified client cert file (%s) & key file (%s): %s", c.CertFile, c.KeyFile, err)
+		} else {
+			return nil, fmt.Errorf("unable to use specified client cert & key: %s", err)
+		}
 	}
 	return &cert, nil
 }
 
 // readCAFile reads the CA cert file from disk.
-func readCAFile(f string) ([]byte, error) {
-	data, err := ioutil.ReadFile(f)
-	if err != nil {
-		return nil, fmt.Errorf("unable to load specified CA cert %s: %s", f, err)
+// if the cert is declared inline, this takes precedence.
+func readCAFile(filepath string, cert string) ([]byte, error) {
+	if cert != "" {
+		data := []byte(cert)
+	} else {
+		data, err := ioutil.ReadFile(filepath)
+		if err != nil {
+			return nil, fmt.Errorf("unable to load specified CA cert %s: %s", f, err)
+		}
 	}
 	return data, nil
 }
